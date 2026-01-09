@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>鑰匙孔偷窺解謎</title>
+    
+    <!-- 引入設定檔 -->
+    <script src="config.js" onerror="window.configLoadError = true;"></script>
+    
+    <style>
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; background-color: #000;
+            font-family: 'Courier New', Courier, monospace;
+            user-select: none; -webkit-user-select: none;
+        }
+        #game-container { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+
+        /* 錯誤訊息 */
+        #error-overlay {
+            display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(20, 0, 0, 0.95); z-index: 9999;
+            flex-direction: column; justify-content: center; align-items: center;
+            color: #ff5555; text-align: center; padding: 20px;
+        }
+        #error-msg { 
+            background: #220000; padding: 20px; border: 1px solid #ff5555; 
+            max-width: 90%; white-space: pre-wrap; font-size: 16px; line-height: 1.6; text-align: left;
+        }
+
+        /* 遊戲圖層 (房間背景) */
+        #room-layer {
+            position: absolute; width: 120vw; height: 120vh; left: -10vw; top: -10vh;
+            background-repeat: no-repeat; background-position: center center; background-size: cover;
+            will-change: transform; transition: transform 0.1s linear; z-index: 1;
+        }
+        .clue-paper {
+            position: absolute; width: 100px; height: 120px; background-color: #f8f1e5;
+            box-shadow: 2px 2px 10px rgba(0,0,0,0.7); display: flex; flex-direction: column;
+            justify-content: center; align-items: center; color: #800; border: 1px solid #ccc; z-index: 5;
+        }
+        .clue-paper span { font-size: 14px; color: #555; margin-bottom: 5px; }
+        .clue-paper strong { font-size: 32px; font-family: 'Times New Roman', serif; letter-spacing: 2px; }
+        .tape {
+            position: absolute; top: -10px; left: 50%; transform: translateX(-50%) rotate(-2deg);
+            width: 40px; height: 15px; background-color: rgba(255, 255, 255, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.2); box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+
+        /* === 遮罩容器 (統一管理 SVG 和 Image) === */
+        #mask-container {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 10;
+            display: flex; justify-content: center; align-items: center;
+        }
+
+        /* 模式 A: SVG 遮罩 */
+        #keyhole-svg { 
+            width: 100%; height: 100%; display: none; /* 預設隱藏 */
+        }
+        #mask-shape-group { transform-origin: 50px 50px; transition: transform 0.3s ease; }
+
+        /* 模式 B: 圖片遮罩 */
+        #keyhole-image-layer {
+            width: 100%; height: 100%;
+            object-fit: cover; /* 讓圖片覆蓋整個畫面 */
+            display: none; /* 預設隱藏 */
+            transition: transform 0.3s ease;
+            /* 圖片需要反轉效果嗎？不，這裡我們假設圖片本身就是「不透明的牆 + 透明的洞」 */
+        }
+
+        /* 前景暗角 (Vignette) */
+        #vignette {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 11;
+            background: radial-gradient(circle at center, transparent 10%, rgba(0,0,0,0.6) 50%, #000 80%);
+        }
+
+        /* 開始畫面 */
+        #start-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.95); display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 100;
+            color: white; text-align: center; padding: 20px; transition: opacity 0.5s;
+        }
+        h1 { color: #d00; text-shadow: 0 0 10px #500; font-size: 2rem; margin-bottom: 10px; }
+        #description { color: #ccc; margin-bottom: 20px; max-width: 600px; }
+        button {
+            margin-top: 20px; padding: 15px 40px; font-size: 1.2rem;
+            background: transparent; color: #d00; border: 2px solid #d00; border-radius: 5px;
+            cursor: pointer; transition: all 0.3s; font-weight: bold;
+        }
+        button:hover { background: #d00; color: #fff; box-shadow: 0 0 20px #d00; }
+        .debug-info { position: absolute; bottom: 10px; left: 10px; color: lime; font-size: 12px; z-index: 50; pointer-events: none; opacity: 0.6; }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- 錯誤提示 -->
+        <div id="error-overlay">
+            <h2 style="color:#fff">⚠️ 發生錯誤</h2>
+            <div id="error-msg"></div>
+            <button onclick="location.reload()" style="margin-top:20px;">重試</button>
+        </div>
+
+        <!-- 1. 房間層 (Background) -->
+        <div id="room-layer">
+            <div id="clue-element" class="clue-paper">
+                <div class="tape"></div>
+                <span id="clue-text"></span>
+                <strong id="clue-code"></strong>
+            </div>
+            <!-- 模糊前景裝飾 -->
+            <div style="position:absolute; bottom:20%; right:10%; width:200px; height:300px; background:rgba(0,0,0,0.6); filter:blur(20px);"></div>
+        </div>
+
+        <div id="vignette"></div>
+
+        <!-- 2. 遮罩層 (Mask) -->
+        <div id="mask-container">
+            <!-- 模式 A: SVG -->
+            <svg id="keyhole-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+                <defs>
+                    <mask id="hole-mask">
+                        <rect x="0" y="0" width="100" height="100" fill="white" />
+                        <g id="mask-shape-group"></g>
+                    </mask>
+                </defs>
+                <rect x="0" y="0" width="100" height="100" fill="black" mask="url(#hole-mask)" />
+            </svg>
+
+            <!-- 模式 B: 圖片 (PNG Transparency) -->
+            <img id="keyhole-image-layer" src="" alt="Mask" />
+        </div>
+
+        <!-- 3. UI 層 -->
+        <div id="start-screen">
+            <h1 id="ui-title">窺視深淵</h1>
+            <p id="ui-desc">...</p>
+            <button id="start-btn">開始</button>
+            <p style="font-size: 12px; color: #666; margin-top: 20px;">(需允許手機動作感測權限)</p>
+        </div>
+
+        <div class="debug-info" id="debug">System Init...</div>
+    </div>
+
+    <script>
+        const roomLayer = document.getElementById('room-layer');
+        const startScreen = document.getElementById('start-screen');
+        const startBtn = document.getElementById('start-btn');
+        const debugText = document.getElementById('debug');
+        const clueEl = document.getElementById('clue-element');
+        const clueTextEl = document.getElementById('clue-text');
+        const clueCodeEl = document.getElementById('clue-code');
+        const errorOverlay = document.getElementById('error-overlay');
+        const errorMsg = document.getElementById('error-msg');
+        
+        // Mask Elements
+        const svgEl = document.getElementById('keyhole-svg');
+        const maskGroup = document.getElementById('mask-shape-group');
+        const imgEl = document.getElementById('keyhole-image-layer');
+        
+        // UI Elements
+        const uiTitle = document.getElementById('ui-title');
+        const uiDesc = document.getElementById('ui-desc');
+
+        // Fallback Config
+        const FallbackConfig = {
+            title: "窺視深淵",
+            description: "房間的某個角落藏著一組密碼...",
+            startButtonText: "開始窺視",
+            backgroundImage: 'https://images.unsplash.com/photo-1519074069444-1ba4fff66d16?q=80&w=2574&auto=format&fit=crop',
+            mask: {
+                mode: 'svg',
+                scale: 1.0,
+                shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />`
+            },
+            clue: { show: true, text: "DEMO", code: "9527", top: "15%", left: "15%", rotation: -5 },
+            gameplay: { maxMoveX: 30, maxMoveY: 30, smoothFactor: 0.1, limitAngle: 40 }
+        };
+
+        let Config = null;
+
+        function showError(msg) {
+            errorOverlay.style.display = 'flex';
+            errorMsg.innerText = msg;
+            startScreen.style.display = 'none';
+        }
+
+        function initSystem() {
+            if (typeof GameConfig !== 'undefined') {
+                Config = GameConfig;
+            } else {
+                Config = FallbackConfig;
+                debugText.innerText = "Mode: Fallback";
+                debugText.style.color = "yellow";
+            }
+
+            // 1. UI Setup
+            if (Config.title) uiTitle.innerText = Config.title;
+            if (Config.description) uiDesc.innerText = Config.description;
+            if (Config.startButtonText) startBtn.innerText = Config.startButtonText;
+
+            // 2. Mask Setup (The Core Logic)
+            // 檢查 mask 設定是否存在，不存在則用 Fallback
+            const maskConfig = Config.mask || FallbackConfig.mask;
+            const mode = maskConfig.mode || 'svg';
+            const scale = maskConfig.scale || 1.0;
+
+            if (mode === 'image') {
+                // --- 圖片模式 ---
+                svgEl.style.display = 'none';
+                imgEl.style.display = 'block';
+                
+                // 設定圖片來源
+                if (maskConfig.imageSrc) {
+                    imgEl.src = maskConfig.imageSrc;
+                    // 套用縮放
+                    imgEl.style.transform = `scale(${scale})`;
+                } else {
+                    showError("Config Error: mask.mode 是 'image'，但沒有提供 mask.imageSrc");
+                }
+
+            } else {
+                // --- SVG 模式 ---
+                imgEl.style.display = 'none';
+                svgEl.style.display = 'block';
+                
+                // 寫入形狀
+                const shapes = maskConfig.shapes || FallbackConfig.mask.shapes;
+                maskGroup.innerHTML = shapes;
+                // 套用縮放
+                maskGroup.style.transform = `scale(${scale})`;
+            }
+
+            // 3. Load Background Image
+            loadRoomImage(Config.backgroundImage);
+        }
+
+        function loadRoomImage(url) {
+            const testImg = new Image();
+            testImg.onload = () => {
+                roomLayer.style.backgroundImage = `url('${url}')`;
+                if(Config === GameConfig) debugText.innerText = "System Ready.";
+                applyConfig();
+            };
+            testImg.onerror = () => {
+                showError(`無法載入背景圖片：${url}`);
+            };
+            testImg.src = url;
+        }
+
+        function applyConfig() {
+            const safeBuffer = 10;
+            const widthVW = 100 + (Config.gameplay.maxMoveX * 2) + safeBuffer; 
+            const heightVH = 100 + (Config.gameplay.maxMoveY * 2) + safeBuffer;
+            roomLayer.style.width = `${widthVW}vw`;
+            roomLayer.style.height = `${heightVH}vh`;
+            roomLayer.style.left = `-${(widthVW - 100) / 2}vw`;
+            roomLayer.style.top = `-${(heightVH - 100) / 2}vh`;
+
+            if (Config.clue.show) {
+                clueTextEl.innerText = Config.clue.text;
+                clueCodeEl.innerText = Config.clue.code;
+                clueEl.style.top = Config.clue.top;
+                clueEl.style.left = Config.clue.left;
+                clueEl.style.transform = `rotate(${Config.clue.rotation}deg)`;
+            } else {
+                clueEl.style.display = 'none';
+            }
+        }
+
+        // Gameplay Loop
+        let currentX=0, currentY=0, targetX=0, targetY=0, isRunning=false;
+
+        startBtn.addEventListener('click', async () => {
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const permissionState = await DeviceOrientationEvent.requestPermission();
+                    if (permissionState === 'granted') startGame();
+                    else alert('需要陀螺儀權限');
+                } catch (e) { startGame(); }
+            } else {
+                startGame();
+            }
+        });
+
+        function startGame() {
+            startScreen.style.opacity = '0';
+            setTimeout(() => { startScreen.style.display = 'none'; }, 500);
+            isRunning = true;
+            window.addEventListener('deviceorientation', handleOrientation);
+            window.addEventListener('mousemove', handleMouse);
+            requestAnimationFrame(gameLoop);
+        }
+
+        function handleOrientation(e) {
+            let x = e.gamma, y = e.beta;
+            if (x === null || y === null) return;
+            let cy = y - 45; 
+            const lim = Config.gameplay.limitAngle;
+            if (x > lim) x = lim; if (x < -lim) x = -lim;
+            if (cy > lim) cy = lim; if (cy < -lim) cy = -lim;
+            targetX = (x/lim) * -Config.gameplay.maxMoveX; 
+            targetY = (cy/lim) * -Config.gameplay.maxMoveY;
+            debugText.innerText = `G: ${Math.round(x)} ${Math.round(y)}`;
+        }
+
+        function handleMouse(e) {
+            targetX = ((e.clientX - window.innerWidth/2)/(window.innerWidth/2)) * -Config.gameplay.maxMoveX;
+            targetY = ((e.clientY - window.innerHeight/2)/(window.innerHeight/2)) * -Config.gameplay.maxMoveY;
+        }
+
+        function gameLoop() {
+            if (!isRunning) return;
+            const sm = Config.gameplay.smoothFactor;
+            currentX += (targetX - currentX) * sm;
+            currentY += (targetY - currentY) * sm;
+            roomLayer.style.transform = `translate3d(${currentX}vw, ${currentY}vh, 0)`;
+            requestAnimationFrame(gameLoop);
+        }
+
+        initSystem();
+    </script>
+</body>
+</html>
